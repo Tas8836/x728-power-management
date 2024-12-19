@@ -1,0 +1,231 @@
+
+X728 UPS V2.3 Setup and Configuration Guide
+
+Step 1: Enable I2C on Your Raspberry Pi
+1. Open the Raspberry Pi configuration tool:
+   sudo raspi-config
+2. Navigate to Interface Options > I2C and select Yes to enable I2C.
+3. Reboot your system to apply the changes:
+   sudo reboot
+4. After reboot, verify that I2C is enabled:
+   sudo i2cdetect -y 1
+   - You should see addresses 0x36 for the battery and 0x68 for the RTC listed.
+
+Step 2: Install Required GPIOD Package
+Install the GPIOD package needed for GPIO management:
+sudo apt update
+sudo apt install -y gpiod
+
+Step 3: Clone the Latest X728 Script Repository
+1. Rename any existing script directory to avoid conflicts:
+   mv x728-script x728-script-old
+2. Clone the latest script from GitHub and make all scripts executable:
+   git clone https://github.com/geekworm-com/x728-script
+   cd x728-script
+   chmod +x *.sh
+
+Step 4: Create and Start the x728-pwr Service
+1. Copy the xPWR.sh script to the correct location:
+   sudo cp -f ./xPWR.sh /usr/local/bin/
+2. Copy the service file to the systemd directory:
+   sudo cp -f x728-pwr.service /etc/systemd/system/
+3. Reload the systemd daemon and enable the service:
+   sudo systemctl daemon-reload
+   sudo systemctl enable x728-pwr
+   sudo systemctl start x728-pwr
+4. Verify the service status:
+   sudo systemctl status x728-pwr
+
+Step 5: Prepare the Software Shutdown Script
+1. Copy xSoft.sh to the correct directory:
+   sudo cp -f ./xSoft.sh /usr/local/bin/
+2. Create an alias for safe shutdown:
+   echo "alias x728off='sudo /usr/local/bin/xSoft.sh 0 26'" >> ~/.bashrc
+3. Apply the changes:
+   source ~/.bashrc
+4. Test the software shutdown command:
+   x728off
+
+Step 6: Integrate x728off into System Shutdown
+To ensure x728off is executed during the system shutdown and not during reboot:
+
+1. Create a Systemd Service File:
+   sudo nano /etc/systemd/system/x728-shutdown.service
+
+   Add the following content:
+   [Unit]
+   Description=Run xSoft.sh during system shutdown to handle UPS
+   #Description=Run x728off only during power-off
+   DefaultDependencies=no
+   Before=poweroff.target
+   Conflicts=reboot.target halt.target
+
+   [Service]
+   Type=oneshot
+   ExecStart=/usr/local/bin/xSoft.sh 0 26
+   RemainAfterExit=true
+
+   [Install]
+   WantedBy=poweroff.target
+
+2. Reload Systemd and Enable the Service:
+   sudo systemctl daemon-reload
+   sudo systemctl enable x728-shutdown.service
+
+3. Test the Shutdown and Reboot Behavior:
+   Use the GUI shutdown to test the BareBoat Necessities Budgie power dialog options. The xSoft.sh should execute allowing the UPS to handle shutdown correctly without affecting reboots.
+** List of commands used 
+sudo raspi-config                                                      # Open Raspberry Pi configuration tool to enable I2C
+sudo reboot                                                            # Reboot the system
+sudo i2cdetect -y 1                                                    # Verify I2C is enabled, look for addresses 0x36 and 0x68
+sudo apt update                                                        # Update package list
+sudo apt install -y gpiod                                              # Install GPIOD package for GPIO management
+mv x728-script x728-script-old                                         # Rename existing script directory to avoid conflicts
+git clone https://github.com/geekworm-com/x728-script                  # Clone the latest X728 script repository
+cd x728-script                                                         # Change to the cloned script directory
+chmod +x *.sh                                                          # Make all scripts executable
+sudo cp -f ./xPWR.sh /usr/local/bin/                                   # Copy xPWR.sh script to the correct location
+sudo cp -f x728-pwr.service /etc/systemd/system/                       # Copy service file to the systemd directory
+sudo systemctl daemon-reload                                           # Reload the systemd daemon
+sudo systemctl enable x728-pwr                                         # Enable the x728-pwr service
+sudo systemctl start x728-pwr                                          # Start the x728-pwr service
+sudo systemctl status x728-pwr                                         # Check the status of the x728-pwr service
+sudo cp -f ./xSoft.sh /usr/local/bin/                                  # Copy xSoft.sh script to the correct directory
+echo "alias x728off='sudo /usr/local/bin/xSoft.sh 0 26'" >> ~/.bashrc  # Create an alias for safe shutdown
+source ~/.bashrc                                                       # Apply changes to the bash configuration
+x728off                                                                # Test the software shutdown command
+sudo nano /etc/systemd/system/x728-shutdown.service                    # Create the custom Systemd service file for shutdown
+sudo systemctl daemon-reload                                           # Reload systemd daemon after creating the service file
+sudo systemctl enable x728-shutdown.service                            # Enable the custom shutdown service
+sudo systemctl status x728-shutdown.service                            # Check the status of the custom shutdown service
+journalctl -u x728-shutdown.service                                    # Check logs for troubleshooting the shutdown service
+sudo journalctl -b -1 | grep -i "shutdown\|poweroff"                   # Inspect shutdown behavior and logs
+sudo nano /usr/local/bin/x728_power_management.py                      # Edit the power management script if needed for adjustments
+sudo python3 /usr/local/bin/x728_power_management.py                   # Run the power management script manually to monitor battery status
+
+
+
+
+
+Here are the instructions for setting up the power management script (x728_power_management.py) that monitors battery voltage and percentage, including how to create and adjust it.you can create this sudo nano /usr/local/bin/x728_power_management.py then copy and paste the bat.py from the sameples that come from the git if its easier or if this is outdated
+
+Instructions to Create the Power Management Script
+Create the Power Management Script File:
+
+bash
+Copy code
+sudo nano /usr/local/bin/x728_power_management.py
+Copy and Paste the Following Code into the Script:
+
+python
+Copy code
+import gpiod
+import time
+import struct
+import smbus
+import subprocess
+import logging
+
+# Setup logging
+logging.basicConfig(
+    filename='/var/log/x728_power_management.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+)
+
+# GPIO and I2C Setup
+chipname = "gpiochip0"  # Use gpiochip0 for Raspberry Pi 4/3
+line_offset = 6
+out_line_offset = 26
+I2C_ADDR = 0x36
+
+# I2C bus setup
+bus = smbus.SMBus(1)
+
+# Open the GPIO chip
+chip = gpiod.Chip(chipname)
+
+# Get the input line for power loss detection
+line = chip.get_line(line_offset)
+line.request(consumer="my_program", type=gpiod.LINE_REQ_EV_BOTH_EDGES)
+
+# Get the output line to trigger safe shutdown
+out_line = chip.get_line(out_line_offset)
+out_line.request(consumer="my_program", type=gpiod.LINE_REQ_DIR_OUT)
+
+# Set the delay time in seconds before shutting down after power loss
+SHUTDOWN_DELAY = 30  # Set to 10 seconds for testing
+
+def readVoltage(bus):
+    read = bus.read_word_data(I2C_ADDR, 2)
+    swapped = struct.unpack("<H", struct.pack(">H", read))[0]
+    voltage = swapped * 1.25 / 1000 / 16
+    return voltage
+
+def readCapacity(bus):
+    read = bus.read_word_data(I2C_ADDR, 4)
+    swapped = struct.unpack("<H", struct.pack(">H", read))[0]
+    capacity = swapped / 256
+    return min(100, capacity)
+
+def shutdown_sequence():
+    logging.info(f"Delaying shutdown for {SHUTDOWN_DELAY} seconds.")
+    time.sleep(SHUTDOWN_DELAY)
+    logging.info("Running safe shutdown with x728off.")
+    subprocess.call(['sudo', '/usr/local/bin/xSoft.sh', '0', '26'])
+    logging.info("Pi shutdown sequence initiated.")
+    time.sleep(2)
+    out_line.set_value(1)
+    time.sleep(3)
+    out_line.set_value(0)
+    logging.info("UPS shutdown signal sent.")
+
+def print_event(event):
+    if event.type == gpiod.LineEvent.RISING_EDGE:
+        logging.info("---AC Power Loss OR Power Adapter Failure---")
+        logging.info(f"Shutdown in {SHUTDOWN_DELAY} seconds.")
+        shutdown_sequence()
+    elif event.type == gpiod.LineEvent.FALLING_EDGE:
+        logging.info("---AC Power OK, Power Adapter OK---")
+
+try:
+    # Main loop to monitor events and battery status
+    while True:
+        # Monitor power loss events
+        event = line.event_wait()
+        if event:
+            event = line.event_read()
+            print_event(event)
+
+        # Monitor battery status
+        voltage = readVoltage(bus)
+        capacity = readCapacity(bus)
+        logging.info(f"Voltage: {voltage:.2f}V, Battery: {capacity:.0f}%")
+
+        # Shutdown if battery is critically low
+        if capacity < 35 or voltage < 3.0:
+            logging.info("Battery is critically low. Initiating shutdown...")
+            shutdown_sequence()
+            break
+
+        time.sleep(2)
+except KeyboardInterrupt:
+    logging.info("Exiting...")
+finally:
+    chip.close()
+Save and Exit:
+
+Save the file (Ctrl + O), then exit (Ctrl + X).
+Make the Script Executable:
+
+bash
+Copy code
+sudo chmod +x /usr/local/bin/x728_power_management.py
+Run the Script Manually to Test:
+
+bash
+Copy code
+sudo python3 /usr/local/bin/x728_power_management.py
+These instructions will help you create, adjust, and test the power management script that monitors the battery voltage and capacity of your UPS.
+
+

@@ -1,0 +1,38 @@
+[Unit]
+Description=Run xSoft.sh during system shutdown to handle UPS
+DefaultDependencies=no
+Before=poweroff.target
+Conflicts=reboot.target halt.target
+
+[Service]
+Type=oneshot
+
+# Add delay BEFORE running the script to avoid systemd race condition
+ExecStartPre=/bin/sleep 10
+
+# Run the xSoft.sh script and ensure it fully completes before poweroff
+ExecStart=/bin/bash -c "/usr/local/bin/xSoft.sh 0 26 && sleep 10"
+
+# Force systemd to wait until script fully completes
+ExecStartPost=/bin/sleep 10
+
+# Remain active to ensure it doesn't exit too soon
+RemainAfterExit=true
+
+[Install]
+WantedBy=poweroff.target
+
+
+#[Unit]
+#Description=Run xSoft.sh during system shutdown to handle UPS
+#DefaultDependencies=no
+#Before=poweroff.target
+#Conflicts=reboot.target halt.target
+
+#[Service]
+#Type=oneshot
+#ExecStart=/usr/local/bin/xSoft.sh 0 26
+#RemainAfterExit=true
+
+#[Install]
+#WantedBy=poweroff.target
